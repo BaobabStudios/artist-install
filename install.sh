@@ -84,7 +84,11 @@ done
 step "5/7  Setting up Python for the tools"
 [ -x "$VENV/bin/python" ] || "$PY312" -m venv "$VENV" || stop "couldn't make the Python environment."
 "$VENV/bin/python" -m pip install -q --upgrade pip
-"$VENV/bin/python" -m pip install -q -r "$BASE/AIFilmPipeline/requirements.txt" || stop "installing the Python packages failed. Run this again."
+# Both repos' packages: the pipeline's (PyYAML) and the harness's (pillow, numpy, certifi).
+for req in "$BASE/AIFilmPipeline/requirements.txt" "$BASE/NaraMediaHarness/requirements.txt"; do
+  [ -f "$req" ] || continue
+  "$VENV/bin/python" -m pip install -q -r "$req" || stop "installing the Python packages failed. Run this again."
+done
 # The tools call `python`; put this environment first so that is the one they get (a Mac has no `python` otherwise).
 LINE="export PATH=\"$VENV/bin:\$PATH\"   # Baobab AI film tools"
 for rc in "$HOME/.zprofile" "$HOME/.bash_profile"; do

@@ -57,6 +57,10 @@ function Install-BaobabTools {
 Write-Host ""
 Write-Host "Baobab AI film tools - installer" -ForegroundColor Green
 Write-Host "This takes 10-20 minutes. Leave the window open until it says 'All done'."
+Write-Host ""
+Write-Host "Windows Security may pop up while this runs - sometimes hidden BEHIND this window - asking" -ForegroundColor Yellow
+Write-Host "about git, Python, ffmpeg or RV. Each time, click Allow (or 'Allow on device'). If the installer" -ForegroundColor Yellow
+Write-Host "seems stuck, look in the taskbar for a Windows Security window." -ForegroundColor Yellow
 
 # ------------------------------------------------------------------ 1. the basics
 Step "1/7  Checking this machine"
@@ -103,8 +107,13 @@ $py = Find-Python312
 if (-not $py) { Stop-With "Python 3.12 isn't where it should be. Run this installer again." }
 if (-not (Test-Path (Join-Path $Venv 'Scripts\python.exe'))) { & $py -m venv $Venv }
 & (Join-Path $Venv 'Scripts\python.exe') -m pip install -q --upgrade pip
-& (Join-Path $Venv 'Scripts\python.exe') -m pip install -q -r (Join-Path $Base 'AIFilmPipeline\requirements.txt')
-if ($LASTEXITCODE -ne 0) { Stop-With "installing the Python packages failed. Run this again." }
+# Both repos' packages: the pipeline's (PyYAML) and the harness's (pillow, numpy, certifi).
+foreach ($req in @('AIFilmPipeline\requirements.txt', 'NaraMediaHarness\requirements.txt')) {
+    $f = Join-Path $Base $req
+    if (-not (Test-Path $f)) { continue }
+    & (Join-Path $Venv 'Scripts\python.exe') -m pip install -q -r $f
+    if ($LASTEXITCODE -ne 0) { Stop-With "installing the Python packages failed. If Windows Security blocked Python, click Allow and run this again." }
+}
 # The tools call `python`; put this environment first so that is the one they get.
 $scripts = Join-Path $Venv 'Scripts'
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
