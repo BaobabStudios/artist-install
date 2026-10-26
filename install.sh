@@ -26,6 +26,19 @@ step() { echo; echo "== $*"; }
 stop() { echo; echo "Stopped: $*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Homebrew's own output goes here, and its last lines are shown only if a step fails.
+LOG="$(mktemp "${TMPDIR:-/tmp}/baobab-install.XXXXXX")"
+show_log() { echo; echo "  Homebrew said:"; tail -n 15 "$LOG" | sed 's/^/    /'; }
+# A formula can install but fail its post-install step, and Homebrew then reports a failure. Retry that
+# step once, for the formula and what it depends on, before giving up.
+brew_install() {
+  brew install -q "$1" >>"$LOG" 2>&1 && return 0
+  brew list --formula "$1" >/dev/null 2>&1 || return 1
+  say "$1 - finishing Homebrew's setup for it..."
+  brew postinstall $(brew deps "$1") "$1" >>"$LOG" 2>&1
+}
+https_ok() { "$PY312" -c "import urllib.request; urllib.request.urlopen('https://github.com', timeout=20)" >>"$LOG" 2>&1; }
+
 echo
 echo "Baobab AI film tools - installer"
 echo "This takes 10-20 minutes. Leave the window open until it says 'All done'."
@@ -39,6 +52,15 @@ free_gb=$(df -g "$HOME" | awk 'NR==2 {print $4}')
 [ "$free_gb" -ge 15 ] || stop "only ${free_gb} GB free; the tools need about 15 GB."
 case "$(uname -m)" in arm64) ARCH=arm64 ;; *) ARCH=x64 ;; esac
 say "macOS $(sw_vers -productVersion), $ARCH, ${free_gb} GB free"
+# Anaconda that switches itself on in every Terminal puts its Python in front of the tools' own (its
+# setup runs after the PATH line this adds), so the tools would run without their packages.
+CONDA_AUTO=""
+conda_exe="${CONDA_EXE:-$(command -v conda || true)}"
+if [ "${CONDA_DEFAULT_ENV:-}" = "base" ] || { [ -n "$conda_exe" ] && [ -x "$conda_exe" ] &&
+     "$conda_exe" config --show auto_activate_base 2>/dev/null | grep -qi true; }; then
+  CONDA_AUTO=1
+  say "Anaconda switches itself on in this Terminal. Installing is fine; there's one step for you at the end."
+fi
 
 step "2/7  Installing the tools the studio's tools run on"
 if ! have brew; then
@@ -53,12 +75,21 @@ fi
 BREW_PREFIX="$(brew --prefix)"
 for f in git python@3.12 ffmpeg gh; do
   if brew list --formula "$f" >/dev/null 2>&1; then say "$f - already installed"
-  else say "$f - installing..."; brew install -q "$f" >/dev/null || stop "$f didn't install. Run this again."; fi
+  else say "$f - installing..."
+       brew_install "$f" || { show_log; stop "$f didn't install. Run this again; if it stops here again, send this window's text to #shine-help."; }; fi
 done
 if brew list --cask google-cloud-sdk >/dev/null 2>&1 || have gcloud; then say "Google Cloud SDK - already installed"
-else say "Google Cloud SDK - installing..."; brew install -q --cask google-cloud-sdk >/dev/null || stop "Google Cloud SDK didn't install. Run this again."; fi
+else say "Google Cloud SDK - installing..."
+     brew install -q --cask google-cloud-sdk >>"$LOG" 2>&1 || { show_log; stop "Google Cloud SDK didn't install. Run this again."; }; fi
 PY312="$BREW_PREFIX/opt/python@3.12/bin/python3.12"
 [ -x "$PY312" ] || stop "Python 3.12 isn't where Homebrew put it ($PY312). Run this again."
+# Python's secure web connections need the certificates set up in those post-install steps. A run that
+# half-failed before says "already installed" above, so check they work rather than trust it.
+if ! https_ok; then
+  say "Python can't make secure web connections yet - finishing Homebrew's setup..."
+  brew postinstall ca-certificates openssl@3 python@3.12 >>"$LOG" 2>&1
+  https_ok || { show_log; stop "Python can't make secure web connections. Check you're online, run this again, and if it stops here again send this window's text to #shine-help."; }
+fi
 
 # ------------------------------------------------------------------ 2. GitHub
 step "3/7  Signing in to GitHub"
@@ -147,3 +178,10 @@ echo "Next: open the Claude app, go to the Code tab, open this folder:"
 echo "    $BASE/AIFilmPipeline"
 echo "and say:  Set me up"
 echo "(If preflight above listed anything as missing, 'Set me up' walks you through it.)"
+if [ -n "$CONDA_AUTO" ]; then
+  echo
+  echo "One step for you first: Anaconda switches itself on in every Terminal window, which puts its"
+  echo "Python in front of the tools' own. Stop it doing that (you can still type 'conda activate'"
+  echo "whenever you want it) by running this, then closing Terminal:"
+  echo "    conda config --set auto_activate_base false"
+fi
